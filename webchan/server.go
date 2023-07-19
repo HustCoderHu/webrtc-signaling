@@ -1,264 +1,228 @@
 package webchan
 
 import (
+	"log"
+	"net/http"
+	"sync"
+	"time"
 
-    "github.com/satori/go.uuid"
-    "github.com/gorilla/websocket"
-    "net/http"
-    "log"
-    "sync"
-    "time"
+	"github.com/gorilla/websocket"
+	uuid "github.com/satori/go.uuid"
 )
-
-
-
 
 const (
-
-    writeWait = 10 * time.Second
-    pongWait = 60 * time.Second
-    pingPeriod = (pongWait * 9) / 10
-    maxMessageSize = 4096
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 4096
 )
 
-
 var upgrader = websocket.Upgrader{
-    ReadBufferSize:  1024,
-    WriteBufferSize: 1024,
-    CheckOrigin: func(r *http.Request) bool { return true },
-    }
-
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
 
 type Connection struct {
-    
-    ws      *websocket.Conn
+	ws *websocket.Conn
 
-    send    chan  []byte
+	send chan []byte
 
-    server  *Server
+	server *Server
 
-    id string
+	id string
 }
-
-
-
 
 type Server struct {
+	http.Handler
 
-    http.Handler
+	handlers
 
-    handlers
+	connections map[string]map[*Connection]struct{}
 
-    connections     map[string]map[*Connection]struct{}
+	rooms map[*Connection]map[string]struct{}
 
-    rooms           map[*Connection]map[string]struct{}
+	connectionLock sync.RWMutex
 
-    connectionLock  sync.RWMutex
+	cids     map[string]*Connection
+	cidsLock sync.RWMutex
+}
 
-    cids            map[string]*Connection
-    cidsLock        sync.RWMutex
+func (s *Server) ServerHTTP(w http.ResponseWriter, r *http.Request) {
+
+	// we need to do some auth
+
+	if err := s.OnAuth(r); err != nil {
+
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("HTTP status code returned!"))
+
+		return
+	}
+
+	ws, err := upgrader.Upgrade(w, r, nil)
+
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	c := &Connection{
+		ws:   ws,
+		send: make(chan []byte, 10),
+		id:   uuid.NewV4().String()}
+
+	c.server = s
+
+	// run into loop
+	go c.writeLoop()
+	go c.readLoop()
+
+	s.onNewConnection(c)
 
 }
 
+func (s *Server) onNewConnection(c *Connection) {
 
-func (s *Server)ServerHTTP(w http.ResponseWriter,r *http.Request){
+	s.cidsLock.Lock()
+	defer s.cidsLock.Unlock()
 
-    // we need to do some auth
-
-    if err := s.OnAuth(r); err != nil {
-        
-        w.WriteHeader(http.StatusUnauthorized)
-        w.Write([]byte("HTTP status code returned!"))
-
-        return
-    }
-
-    ws,err := upgrader.Upgrade(w,r,nil)
-
-    if err != nil {
-        log.Println(err) 
-        return
-    }
-
-    c := &Connection{ 
-                ws:ws,
-                send:make(chan []byte,10),
-                id:uuid.NewV4().String()}
-
-    c.server = s
-
-    // run into loop
-    go c.writeLoop()
-    go c.readLoop()
-
-    s.onNewConnection(c)
+	s.cids[c.id] = c
 
 }
-
-
-func (s *Server) onNewConnection(c *Connection){
-
-    s.cidsLock.Lock()
-    defer s.cidsLock.Unlock()
-
-    s.cids[c.id] = c
-
-}
-
 
 func (s *Server) onCleanConnection(c *Connection) {
 
-    s.connectionLock.Lock()
-    defer s.connectionLock.Unlock()
+	s.connectionLock.Lock()
+	defer s.connectionLock.Unlock()
 
-    cos := s.connections
+	cos := s.connections
 
-    byRoom,ok := s.rooms[c]
+	byRoom, ok := s.rooms[c]
 
-    if ok {
-        
-        for room := range byRoom {
-                if curRoom,ok := cos[room];ok {
-                    delete(curRoom,c)
-                    if len(curRoom) == 0 {
-                        delete (cos,room)    
-                    }
-                }
-        }
+	if ok {
 
-        delete(s.rooms,c)
-    }
+		for room := range byRoom {
+			if curRoom, ok := cos[room]; ok {
+				delete(curRoom, c)
+				if len(curRoom) == 0 {
+					delete(cos, room)
+				}
+			}
+		}
 
-    s.cidsLock.Lock()
-    defer s.cidsLock.Unlock()
+		delete(s.rooms, c)
+	}
 
-    delete(s.cids,c.id)
+	s.cidsLock.Lock()
+	defer s.cidsLock.Unlock()
 
-    c.ws.Close()
+	delete(s.cids, c.id)
+
+	c.ws.Close()
 }
 
-
-func (s *Server)BroadcastTo(room,message string,args interface{}){
-    
-    
-}
-
-
-
-func (s *Server)BroadcastToAll(message string,args interface{}){
-    
-    
-    
-}
-
-
-
-func (s *Server)List(room string) ([]*Connection,error){
-
-
-
-    return nil,nil
-}
-
-
-
-
-func (c *Connection) writeLoop(){
-
-    ticker := time.NewTicker(pingPeriod)
-    
-    defer func() {
-
-        ticker.Stop()
-        c.ws.Close()
-
-    }()
-
-    for {
-        
-        select {
-        case message,ok := <- c.send:
-            if !ok {
-                c.write(websocket.CloseMessage,[]byte{})
-                continue
-            }
-            if err := c.write(websocket.TextMessage, message); err != nil {
-                return
-            }
-        case <- ticker.C:
-            if err := c.write(websocket.PingMessage,[]byte{}); err != nil {
-                continue    
-            }
-        }
-        
-    }
-
+func (s *Server) BroadcastTo(room, message string, args interface{}) {
 
 }
 
+func (s *Server) BroadcastToAll(message string, args interface{}) {
+
+}
+
+func (s *Server) List(room string) ([]*Connection, error) {
+
+	return nil, nil
+}
+
+func (c *Connection) writeLoop() {
+
+	ticker := time.NewTicker(pingPeriod)
+
+	defer func() {
+
+		ticker.Stop()
+		c.ws.Close()
+
+	}()
+
+	for {
+
+		select {
+		case message, ok := <-c.send:
+			if !ok {
+				c.write(websocket.CloseMessage, []byte{})
+				continue
+			}
+			if err := c.write(websocket.TextMessage, message); err != nil {
+				return
+			}
+		case <-ticker.C:
+			if err := c.write(websocket.PingMessage, []byte{}); err != nil {
+				continue
+			}
+		}
+
+	}
+
+}
 
 // for outside
-func (c *Connection) Write(message  []byte){
+func (c *Connection) Write(message []byte) {
 
-    c.send <- message
+	c.send <- message
 
 }
-
 
 // for internal
-func (c *Connection) write(mt int,payload []byte) error {
+func (c *Connection) write(mt int, payload []byte) error {
 
-    c.ws.SetWriteDeadline(time.Now().Add(writeWait))
-    return c.ws.WriteMessage(mt, payload)
+	c.ws.SetWriteDeadline(time.Now().Add(writeWait))
+	return c.ws.WriteMessage(mt, payload)
 
 }
 
+func (c *Connection) readLoop() {
 
-func (c *Connection) readLoop(){
+	defer func() {
+		c.server.onCleanConnection(c)
+	}()
 
-    defer func(){
-        c.server.onCleanConnection(c)
-    }()
+	c.ws.SetReadLimit(maxMessageSize)
+	c.ws.SetReadDeadline(time.Now().Add(pongWait))
+	c.ws.SetPongHandler(func(string) error { c.ws.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 
-    c.ws.SetReadLimit(maxMessageSize)
-    c.ws.SetReadDeadline(time.Now().Add(pongWait))
-    c.ws.SetPongHandler(func(string) error { c.ws.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	for {
 
-    for {
+		// we only surport TextMessage
 
-        // we only surport TextMessage
+		_, message, err := c.ws.ReadMessage()
 
-        _,message,err := c.ws.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
+				log.Printf(" websocekt read error", err)
+			}
 
-        if err != nil {
-            if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway){
-                log.Printf(" websocekt read error",err)
-            }
+			c.server.OnDisconnection(c, err.Error())
 
-            c.server.OnDisconnection(c,err.Error())
+			break
+		}
 
-            break
-        }
-
-        // onMessage
-        go c.server.OnMessage(c,message)
-    }
+		// onMessage
+		go c.server.OnMessage(c, message)
+	}
 }
-
-
-
-
 
 /**
 new server
 */
 
 func NewServer() *Server {
-    
-    s := Server{}
-    s.connections   = make(map[string]map[*Connection]struct{})
-    s.rooms         = make(map[*Connection]map[string]struct{})
-    s.cids          = make(map[string]*Connection)
 
-    return &s
+	s := Server{}
+	s.connections = make(map[string]map[*Connection]struct{})
+	s.rooms = make(map[*Connection]map[string]struct{})
+	s.cids = make(map[string]*Connection)
+
+	return &s
 }

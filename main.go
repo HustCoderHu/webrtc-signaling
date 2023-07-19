@@ -1,58 +1,43 @@
 package main
 
-
 import (
-    "./webchan"
-    "log"
-    "net/http"
+	"log"
+	"net/http"
+	"webrtc-signaling/webchan"
 )
 
+func main() {
 
+	server := webchan.NewServer()
 
+	server.OnAuth = func(args interface{}) error {
 
-func main(){
+		log.Println("OnAuth")
 
-    server := webchan.NewServer()
+		return nil
+	}
 
-    
-    server.OnAuth = func(args interface{}) error {
+	server.OnConnection = func(c *webchan.Connection, ars interface{}) {
 
-            log.Println("OnAuth")
+		log.Println("OnConnection")
+	}
 
-            return nil
-        }
+	server.OnMessage = func(c *webchan.Connection, message []byte) {
 
+		log.Println("OnMessage")
+	}
 
-    server.OnConnection = func(c *webchan.Connection,ars interface{}){
+	server.OnDisconnection = func(c *webchan.Connection, message string) {
 
-                log.Println("OnConnection")
-            }
+		log.Println("OnDisconnection")
+	}
 
+	serveMux := http.NewServeMux()
 
+	serveMux.Handle("/ws", server)
 
-    server.OnMessage = func(c *webchan.Connection,message []byte) {
+	log.Println("Starting server...")
 
-                log.Println("OnMessage")
-        }
-
-
-
-    server.OnDisconnection = func(c *webchan.Connection,message string){
-        
-                log.Println("OnDisconnection")
-        }
-
-
-
-
-    serveMux := http.NewServeMux()
-
-    serveMux.Handle("/ws",server)
-
-
-    log.Println("Starting server...")
-
-    http.ListenAndServe(":8000",serveMux)
-
+	http.ListenAndServe(":8000", serveMux)
 
 }
