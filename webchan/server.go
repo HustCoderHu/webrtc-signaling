@@ -1,126 +1,175 @@
 package webchan
 
 import (
-	"log"
 	"net/http"
 	"sync"
-	"time"
+	"webrtc-signaling/pkg/logger"
 
 	"github.com/gorilla/websocket"
 	uuid "github.com/satori/go.uuid"
 )
 
-const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
-	maxMessageSize = 4096
-)
-
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
-
-type Connection struct {
-	ws *websocket.Conn
-
-	send chan []byte
-
-	server *Server
-
-	id string
+    ReadBufferSize:  1024,
+    WriteBufferSize: 1024,
+    CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
 type Server struct {
-	http.Handler
+    http.Handler
 
-	handlers
+    handlers
 
-	connections map[string]map[*Connection]struct{}
+    members     map[uuid.UUID]*Member
+    membersLock sync.RWMutex
 
-	rooms map[*Connection]map[string]struct{}
+    // connections map[string]map[*Connection]struct{}
 
-	connectionLock sync.RWMutex
+    rooms     map[string]*Room
+    roomsLock sync.RWMutex
 
-	cids     map[string]*Connection
-	cidsLock sync.RWMutex
+    recvCh chan MemberMsg
+    errCh  chan MemberErrorMsg
+
+    fnMap map[string]func(*Server, *Member, []byte) error
+
+    // connectionLock sync.RWMutex
+
+    // cids     map[string]*Connection
+    // cidsLock sync.RWMutex
 }
 
-func (s *Server) ServerHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	// we need to do some auth
+    // we need to do some auth
 
-	if err := s.OnAuth(r); err != nil {
+    // if err := s.OnAuth(r); err != nil {
 
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("HTTP status code returned!"))
+    //   w.WriteHeader(http.StatusUnauthorized)
+    //   w.Write([]byte("HTTP status code returned!"))
 
-		return
-	}
+    //   return
+    // }
 
-	ws, err := upgrader.Upgrade(w, r, nil)
+    ws, err := upgrader.Upgrade(w, r, nil)
 
-	if err != nil {
-		log.Println(err)
-		return
-	}
+    if err != nil {
+        logger.Error("%s", err)
+        return
+    }
+    m := NewMember(uuid.NewV4(), ws, s)
+    go m.loop(s.recvCh, s.errCh)
 
-	c := &Connection{
-		ws:   ws,
-		send: make(chan []byte, 10),
-		id:   uuid.NewV4().String()}
-
-	c.server = s
-
-	// run into loop
-	go c.writeLoop()
-	go c.readLoop()
-
-	s.onNewConnection(c)
-
+    s.membersLock.Lock()
+    defer s.membersLock.Unlock()
+    s.members[m.uuid] = m
 }
 
-func (s *Server) onNewConnection(c *Connection) {
+// func (s *Server) onNewConnection(wsConn *websocket.Conn) {
+//     m := NewMember(uuid.NewV4(), wsConn, s)
+//     s.membersLock.Lock()
+//     defer s.membersLock.Unlock()
+//     s.members[m.uuid] = m
+//     // s.cidsLock.Lock()
+//     // defer s.cidsLock.Unlock()
+//     // s.cids[string(m.uuid)] = c
+// }
 
-	s.cidsLock.Lock()
-	defer s.cidsLock.Unlock()
+func (s *Server) Loop() {
+    for {
+        select {
+        case memberMsg, ok := <-s.recvCh:
+            if !ok {
+                continue
+            }
+            if err := s.onMemberMsg(memberMsg); err != nil {
+                break
+            }
+            break
 
-	s.cids[c.id] = c
-
+        case memberErrorMsg, ok := <-s.errCh:
+            if !ok {
+                break
+            }
+            if err := s.onMemberErrorMsg(memberErrorMsg); err != nil {
+                break
+            }
+            break
+        }
+    }
 }
 
-func (s *Server) onCleanConnection(c *Connection) {
-
-	s.connectionLock.Lock()
-	defer s.connectionLock.Unlock()
-
-	cos := s.connections
-
-	byRoom, ok := s.rooms[c]
-
-	if ok {
-
-		for room := range byRoom {
-			if curRoom, ok := cos[room]; ok {
-				delete(curRoom, c)
-				if len(curRoom) == 0 {
-					delete(cos, room)
-				}
-			}
-		}
-
-		delete(s.rooms, c)
-	}
-
-	s.cidsLock.Lock()
-	defer s.cidsLock.Unlock()
-
-	delete(s.cids, c.id)
-
-	c.ws.Close()
+func (s *Server) onMemberMsg(memberMsg MemberMsg) error {
+    parsedMsg := Message{}
+    if err := parsedMsg.Parse(memberMsg.reqBody); err != nil {
+        logger.Error("Message:Parse() error: %s, member: %s req: %s", err,
+            memberMsg.member.Info(), string(memberMsg.reqBody))
+        return err
+    }
+    err := s.fnMap[parsedMsg.EventName](s, memberMsg.member, parsedMsg.Data)
+    if err != nil {
+        logger.Error("parsedMsg.EventName handle error: %s, member: %s req: %s",
+            err, memberMsg.member.Info(), memberMsg.reqBody)
+        return err
+    }
+    return nil
 }
+
+func (s *Server) onMemberErrorMsg(memberErrorMsg MemberErrorMsg) error {
+    return nil
+}
+
+// func (s *Server) On
+
+func (s *Server) quitRoom(m *Member) {
+    if m.roomId == "" {
+        return
+    }
+    if _, ok := s.rooms[m.roomId]; ok {
+        s.roomsLock.Lock()
+        defer s.roomsLock.Unlock()
+        delete(s.rooms, m.roomId)
+        logger.Info("member: %s", m.Info())
+    }
+}
+
+func (s *Server) removeMember(m *Member) {
+    s.quitRoom(m)
+    s.membersLock.Lock()
+    defer s.membersLock.Unlock()
+    delete(s.members, m.uuid)
+}
+
+// func (s *Server) onCleanConnection(c *Connection) {
+
+//     s.connectionLock.Lock()
+//     defer s.connectionLock.Unlock()
+
+//     conns := s.connections
+
+//     byRoom, ok := s.rooms[c]
+
+//     if ok {
+
+//         for room := range byRoom {
+//             if curRoom, ok := conns[room]; ok {
+//                 delete(curRoom, c)
+//                 if len(curRoom) == 0 {
+//                     delete(conns, room)
+//                 }
+//             }
+//         }
+
+//         delete(s.rooms, c)
+//     }
+
+//     s.cidsLock.Lock()
+//     defer s.cidsLock.Unlock()
+
+//     delete(s.cids, c.id)
+
+//     c.ws.Close()
+// }
 
 func (s *Server) BroadcastTo(room, message string, args interface{}) {
 
@@ -130,99 +179,31 @@ func (s *Server) BroadcastToAll(message string, args interface{}) {
 
 }
 
-func (s *Server) List(room string) ([]*Connection, error) {
-
-	return nil, nil
-}
-
-func (c *Connection) writeLoop() {
-
-	ticker := time.NewTicker(pingPeriod)
-
-	defer func() {
-
-		ticker.Stop()
-		c.ws.Close()
-
-	}()
-
-	for {
-
-		select {
-		case message, ok := <-c.send:
-			if !ok {
-				c.write(websocket.CloseMessage, []byte{})
-				continue
-			}
-			if err := c.write(websocket.TextMessage, message); err != nil {
-				return
-			}
-		case <-ticker.C:
-			if err := c.write(websocket.PingMessage, []byte{}); err != nil {
-				continue
-			}
-		}
-
-	}
-
-}
-
-// for outside
-func (c *Connection) Write(message []byte) {
-
-	c.send <- message
-
-}
-
-// for internal
-func (c *Connection) write(mt int, payload []byte) error {
-
-	c.ws.SetWriteDeadline(time.Now().Add(writeWait))
-	return c.ws.WriteMessage(mt, payload)
-
-}
-
-func (c *Connection) readLoop() {
-
-	defer func() {
-		c.server.onCleanConnection(c)
-	}()
-
-	c.ws.SetReadLimit(maxMessageSize)
-	c.ws.SetReadDeadline(time.Now().Add(pongWait))
-	c.ws.SetPongHandler(func(string) error { c.ws.SetReadDeadline(time.Now().Add(pongWait)); return nil })
-
-	for {
-
-		// we only surport TextMessage
-
-		_, message, err := c.ws.ReadMessage()
-
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
-				log.Printf(" websocekt read error", err)
-			}
-
-			c.server.OnDisconnection(c, err.Error())
-
-			break
-		}
-
-		// onMessage
-		go c.server.OnMessage(c, message)
-	}
-}
+// func (s *Server) List(room string) ([]*Connection, error) {
+//     return nil, nil
+// }
 
 /**
 new server
 */
 
 func NewServer() *Server {
-
-	s := Server{}
-	s.connections = make(map[string]map[*Connection]struct{})
-	s.rooms = make(map[*Connection]map[string]struct{})
-	s.cids = make(map[string]*Connection)
-
-	return &s
+    s := Server{
+        members: make(map[uuid.UUID]*Member),
+        rooms:   make(map[string]*Room),
+        recvCh:  make(chan MemberMsg, 16),
+        errCh:   make(chan MemberErrorMsg, 16),
+        fnMap: map[string]func(*Server, *Member, []byte) error{
+            "__join":          onJoin,
+            "__ice_candidate": onIceCandidate,
+            "__offer":         onOffer,
+            "__answer":        onAnswer,
+            "__invite":        onInvite,
+            "__ack":           onAck,
+        },
+    }
+    // s.connections = make(map[string]map[*Connection]struct{})
+    // s.rooms = make(map[*Connection]map[string]struct{})
+    // s.cids = make(map[string]*Connection)
+    return &s
 }

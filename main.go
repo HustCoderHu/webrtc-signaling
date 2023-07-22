@@ -1,43 +1,43 @@
 package main
 
 import (
-	"log"
 	"net/http"
+	"webrtc-signaling/pkg/logger"
 	"webrtc-signaling/webchan"
 )
 
 func main() {
+    // logger.InitLog() // linux 上执行这行，log 会写进 syslog，否则就输出到 stdout
+    logger.SetLogLevel(logger.LOG_INFO)
+    logger.Info("default log level: %d", logger.GetLogLevel())
 
-	server := webchan.NewServer()
+    server := webchan.NewServer()
 
-	server.OnAuth = func(args interface{}) error {
+    server.OnAuth = func(args interface{}) error {
+        logger.Info("OnAuth")
+        return nil
+    }
 
-		log.Println("OnAuth")
+    go server.Loop()
 
-		return nil
-	}
+    // server.OnConnection = func(c *webchan.Connection, ars interface{}) {
+    //     logger.Info("OnConnection from %s", c.PeerInfo())
+    // }
 
-	server.OnConnection = func(c *webchan.Connection, ars interface{}) {
+    // server.OnMessage = func(c *webchan.Connection, message []byte) {
+    //     logger.Info("OnMessage from %s", c.PeerInfo())
+    // }
 
-		log.Println("OnConnection")
-	}
+    // server.OnDisconnection = func(c *webchan.Connection, message string) {
+    //     logger.Info("OnDisconnection from %s", c.PeerInfo())
+    // }
 
-	server.OnMessage = func(c *webchan.Connection, message []byte) {
+    serveMux := http.NewServeMux()
 
-		log.Println("OnMessage")
-	}
+    serveMux.Handle("/", server)
 
-	server.OnDisconnection = func(c *webchan.Connection, message string) {
+    port := "8000"
+    logger.Info("server listening on: " + port)
 
-		log.Println("OnDisconnection")
-	}
-
-	serveMux := http.NewServeMux()
-
-	serveMux.Handle("/ws", server)
-
-	log.Println("Starting server...")
-
-	http.ListenAndServe(":8000", serveMux)
-
+    http.ListenAndServe(":" + port, serveMux)
 }
