@@ -2,7 +2,6 @@ package webchan
 
 import (
 	"net/http"
-	"sync"
 	"webrtc-signaling/pkg/logger"
 
 	"github.com/gorilla/websocket"
@@ -16,27 +15,18 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-    http.Handler
+    // http.Handler
+    Handlers
 
-    handlers
-
-    members     map[uuid.UUID]*Member
-    membersLock sync.RWMutex
-
-    // connections map[string]map[*Connection]struct{}
-
+    members     map[string]*Member
     rooms     map[string]*Room
-    roomsLock sync.RWMutex
 
+    connectionCh chan *websocket.Conn
     recvCh chan MemberMsg
     errCh  chan MemberErrorMsg
 
     fnMap map[string]func(*Server, *Member, []byte) error
 
-    // connectionLock sync.RWMutex
-
-    // cids     map[string]*Connection
-    // cidsLock sync.RWMutex
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -52,35 +42,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     // }
 
     ws, err := upgrader.Upgrade(w, r, nil)
-
     if err != nil {
         logger.Error("%s", err)
         return
     }
-    m := NewMember(uuid.NewV4(), ws, s)
-    go m.loop(s.recvCh, s.errCh)
-
-    s.membersLock.Lock()
-    defer s.membersLock.Unlock()
-    s.members[m.uuid] = m
+    s.connectionCh <- ws
 }
-
-// func (s *Server) onNewConnection(wsConn *websocket.Conn) {
-//     m := NewMember(uuid.NewV4(), wsConn, s)
-//     s.membersLock.Lock()
-//     defer s.membersLock.Unlock()
-//     s.members[m.uuid] = m
-//     // s.cidsLock.Lock()
-//     // defer s.cidsLock.Unlock()
-//     // s.cids[string(m.uuid)] = c
-// }
 
 func (s *Server) Loop() {
     for {
         select {
+        case wsConn, ok := <- s.connectionCh:
+            if !ok {
+                break
+            }
+            if err := s.onConnection(wsConn); err != nil {
+                break
+            }
+            break
         case memberMsg, ok := <-s.recvCh:
             if !ok {
-                continue
+                break
             }
             if err := s.onMemberMsg(memberMsg); err != nil {
                 break
@@ -97,6 +79,13 @@ func (s *Server) Loop() {
             break
         }
     }
+}
+
+func (s *Server) onConnection(wsConn *websocket.Conn) error {
+    m := NewMember(uuid.NewV4(), wsConn, s)
+    s.members[m.uuid.String()] = m
+    go m.loop(s.recvCh, s.errCh)
+    return nil
 }
 
 func (s *Server) onMemberMsg(memberMsg MemberMsg) error {
@@ -116,60 +105,64 @@ func (s *Server) onMemberMsg(memberMsg MemberMsg) error {
 }
 
 func (s *Server) onMemberErrorMsg(memberErrorMsg MemberErrorMsg) error {
+    logger.Info("msg: %s", memberErrorMsg.msg)
+    s.removeMember(memberErrorMsg.member)
+
     return nil
 }
 
-// func (s *Server) On
+func (s *Server) GetOrCreateRoomByRoomId(roomId string, create bool) *Room {
+    room, ok := s.rooms[roomId]
+    if ok {
+        return room
+    } else if create {
+        room = &Room { roomId: roomId }
+        s.rooms[roomId] = room
+        return room
+    }
+    return nil
+}
 
-func (s *Server) quitRoom(m *Member) {
+func (s *Server) findRoomByMember(m *Member) *Room {
+    if room, ok := s.rooms[m.roomId]; ok {
+        return room
+    }
+    return nil
+}
+
+func (s *Server) checkRemoveRoom(room *Room) {
+    if room.CountMembers() == 0 {
+        logger.Info("no members, so delete room: %s", room.roomId)
+        delete(s.rooms, room.roomId)
+    }
+}
+
+func (s *Server) memberQuitRoom(m *Member) {
     if m.roomId == "" {
         return
     }
-    if _, ok := s.rooms[m.roomId]; ok {
-        s.roomsLock.Lock()
-        defer s.roomsLock.Unlock()
-        delete(s.rooms, m.roomId)
-        logger.Info("member: %s", m.Info())
+    room := s.findRoomByMember(m)
+    if room == nil {
+        return
     }
+    room.RemoveMember(m)
+    logger.Info("member: %s, room: %s", m.Info(), room.Info())
+    s.checkRemoveRoom(room)
+}
+
+func (s *Server) GetMemberByUuid(uuid uuid.UUID) *Member {
+    if member, ok := s.members[uuid.String()]; ok {
+        return member
+    }
+    return nil
 }
 
 func (s *Server) removeMember(m *Member) {
-    s.quitRoom(m)
-    s.membersLock.Lock()
-    defer s.membersLock.Unlock()
-    delete(s.members, m.uuid)
+    logger.Info("member: %s", m.Info())
+    s.memberQuitRoom(m)
+    delete(s.members, m.uuid.String())
+    m.Dispose()
 }
-
-// func (s *Server) onCleanConnection(c *Connection) {
-
-//     s.connectionLock.Lock()
-//     defer s.connectionLock.Unlock()
-
-//     conns := s.connections
-
-//     byRoom, ok := s.rooms[c]
-
-//     if ok {
-
-//         for room := range byRoom {
-//             if curRoom, ok := conns[room]; ok {
-//                 delete(curRoom, c)
-//                 if len(curRoom) == 0 {
-//                     delete(conns, room)
-//                 }
-//             }
-//         }
-
-//         delete(s.rooms, c)
-//     }
-
-//     s.cidsLock.Lock()
-//     defer s.cidsLock.Unlock()
-
-//     delete(s.cids, c.id)
-
-//     c.ws.Close()
-// }
 
 func (s *Server) BroadcastTo(room, message string, args interface{}) {
 
@@ -189,8 +182,9 @@ new server
 
 func NewServer() *Server {
     s := Server{
-        members: make(map[uuid.UUID]*Member),
+        members: make(map[string]*Member),
         rooms:   make(map[string]*Room),
+        connectionCh: make(chan *websocket.Conn, 128),
         recvCh:  make(chan MemberMsg, 16),
         errCh:   make(chan MemberErrorMsg, 16),
         fnMap: map[string]func(*Server, *Member, []byte) error{
@@ -202,8 +196,5 @@ func NewServer() *Server {
             "__ack":           onAck,
         },
     }
-    // s.connections = make(map[string]map[*Connection]struct{})
-    // s.rooms = make(map[*Connection]map[string]struct{})
-    // s.cids = make(map[string]*Connection)
     return &s
 }

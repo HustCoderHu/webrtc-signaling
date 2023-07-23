@@ -36,7 +36,7 @@ func main() {
 
     serveMux.Handle("/", server)
 
-    port := "8000"
+    port := "3000"
     logger.Info("server listening on: " + port)
 
     http.ListenAndServe(":" + port, serveMux)

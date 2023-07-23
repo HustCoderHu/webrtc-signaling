@@ -39,6 +39,11 @@ func NewMember(uniqueId uuid.UUID, wsConn *websocket.Conn, s *Server) *Member {
     }
 }
 
+func (t *Member) Dispose() error {
+    t.wsConn.Close()
+    return nil
+}
+
 func (t *Member) Info() string {
     addr := t.wsConn.RemoteAddr().String()
     return "[name: " + t.userName + " addr: " +

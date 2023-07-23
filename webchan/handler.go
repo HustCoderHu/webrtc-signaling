@@ -7,7 +7,7 @@ package webchan
 // 	OnMessage       func(c *Connection, message []byte)
 // }
 
-type handlers struct {
+type Handlers struct {
 	OnConnection    func(c *Member, args interface{})
 	OnAuth          func(args interface{}) error
 	OnDisconnection func(c *Member, message string)

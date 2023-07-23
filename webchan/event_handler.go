@@ -15,31 +15,11 @@ func onJoin(s *Server, m *Member, msgData []byte) error {
             err, msgData, m.Info())
     }
 
-    room, ok := s.rooms[joinMsg.RoomId]
-    var rspJson []byte = nil
-    var err error
-    var uuids []uuid.UUID = nil
-    if ok {
-        if room.members != nil {
-            uuids = make([]uuid.UUID, 0, len(room.members))
-            for _, member := range room.members {
-                if member.uuid == m.uuid {
-                    continue
-                }
-                uuids = append(uuids, member.uuid)
-            }
-        } else {
-            room.members = map[uuid.UUID]*Member { m.uuid: m }
-        }
-    } else {
-        // create room
-        s.rooms[joinMsg.RoomId] = &Room {
-            roomId: joinMsg.RoomId,
-            members: map[uuid.UUID]*Member { m.uuid: m },
-        }
-    }
+    room := s.GetOrCreateRoomByRoomId(joinMsg.RoomId, true)
+    room.AddMember(m)
 
-    rspJson, err = GenJsonRspPeers(uuids, m.uuid)
+    uuids := room.GetMemberUuids()
+    rspJson, err := GenJsonRspPeers(uuids, m.uuid)
     if err != nil {
         logger.Error("GenJsonRspPeers error: %s, data: %s, member: %s",
             err, msgData, m.Info())
@@ -49,20 +29,91 @@ func onJoin(s *Server, m *Member, msgData []byte) error {
     return nil
 }
 
+func notifyRoomMembers(room *Room, selfUuid uuid.UUID) {
+    msg, err := GenJsonRspNewPeer(selfUuid)
+    if err != nil {
+        logger.Error("GenJsonRspNewPeer error: %s, data: %s, member: %s",
+            err, msg, selfUuid)
+        return
+    }
+    room.BroadCastMsgExceptMember(msg, selfUuid)
+}
+
 func onIceCandidate(s *Server, m *Member, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
+    iceMsg := &MsgICECandidate{}
+    if err := iceMsg.Parse(msgData); err != nil {
+        logger.Error("iceMsg.Parse error: %s, data: %s, member: %s",
+            err, msgData, m.Info())
+        return err
+    }
+    msg, err := GenJsonRspAgainstICECandidate(iceMsg, m.uuid)
+    if err != nil {
+        logger.Error(
+            "GetJsonRspAgainstICECandidate error: %s, data: %s, member: %s",
+            err, msgData, m.Info())
+        return err
+    }
 
-    // GenJsonRspAgainstICECandidate()
+    targetMember := s.GetMemberByUuid(uuid.UUID(iceMsg.SocketId))
+    if targetMember == nil {
+        logger.Error("target member not found: %s", iceMsg.SocketId)
+        return nil
+    }
+    targetMember.OnMsg(msg)
     return nil
 }
 
 func onOffer(s *Server, m *Member, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
+
+    offerMsg := &MsgOffer{}
+    if err := offerMsg.Parse(msgData); err != nil {
+        logger.Error("offerMsg.Parse error: %s, data: %s, member: %s",
+            err, msgData, m.Info())
+        return err
+    }
+
+    msg, err := GenJsonRspAgainstOffer(offerMsg, m.uuid)
+    if err != nil {
+        logger.Error(
+            "GetJsonRspAgainstOffer error: %s, data: %s, member: %s",
+            err, msgData, m.Info())
+        return err
+    }
+    targetMember := s.GetMemberByUuid(uuid.UUID(offerMsg.SocketId))
+    if targetMember == nil {
+        logger.Error("target member not found: %s", offerMsg.SocketId)
+        return nil
+    }
+    targetMember.OnMsg(msg)
     return nil
 }
 
 func onAnswer(s *Server, m *Member, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
+
+    answerMsg := &MsgAnswer{}
+    if err := answerMsg.Parse(msgData); err != nil {
+        logger.Error("answerMsg.Parse error: %s, data: %s, member: %s",
+            err, msgData, m.Info())
+        return err
+    }
+
+    msg, err := GenJsonRspAgainstAnswer(answerMsg, m.uuid)
+    if err != nil {
+        logger.Error(
+            "GetJsonRspAgainstAnswer error: %s, data: %s, member: %s",
+            err, msgData, m.Info())
+        return err
+    }
+    
+    targetMember := s.GetMemberByUuid(uuid.UUID(answerMsg.SocketId))
+    if targetMember == nil {
+        logger.Error("target member not found: %s", answerMsg.SocketId)
+        return nil
+    }
+    targetMember.OnMsg(msg)
     return nil
 }
 
