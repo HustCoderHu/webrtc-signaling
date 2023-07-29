@@ -1,6 +1,7 @@
 package webchan
 
 import (
+	"encoding/json"
 	"net/http"
 	"webrtc-signaling/pkg/logger"
 
@@ -18,15 +19,14 @@ type Server struct {
     // http.Handler
     Handlers
 
-    members     map[string]*Member
-    rooms     map[string]*Room
+    members map[string]IMember
+    rooms   map[string]*Room
 
     connectionCh chan *websocket.Conn
-    recvCh chan MemberMsg
-    errCh  chan MemberErrorMsg
+    recvCh       chan MemberMsg
+    errCh        chan MemberErrorMsg
 
-    fnMap map[string]func(*Server, *Member, []byte) error
-
+    event_handlers map[string]func(*Server, IMember, []byte) error
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -52,13 +52,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Loop() {
     for {
         select {
-        case wsConn, ok := <- s.connectionCh:
+        case wsConn, ok := <-s.connectionCh:
             if !ok {
                 break
             }
-            if err := s.onConnection(wsConn); err != nil {
-                break
-            }
+            m := NewMember(uuid.NewV4(), wsConn, s)
+            s.addMember(m)
+            go m.loop(s.recvCh, s.errCh)
             break
         case memberMsg, ok := <-s.recvCh:
             if !ok {
@@ -81,21 +81,14 @@ func (s *Server) Loop() {
     }
 }
 
-func (s *Server) onConnection(wsConn *websocket.Conn) error {
-    m := NewMember(uuid.NewV4(), wsConn, s)
-    s.members[m.uuid.String()] = m
-    go m.loop(s.recvCh, s.errCh)
-    return nil
-}
-
 func (s *Server) onMemberMsg(memberMsg MemberMsg) error {
-    parsedMsg := Message{}
-    if err := parsedMsg.Parse(memberMsg.reqBody); err != nil {
-        logger.Error("Message:Parse() error: %s, member: %s req: %s", err,
+    parsedMsg := &Message{}
+    if err := json.Unmarshal(memberMsg.reqBody, parsedMsg); err != nil {
+        logger.Error("Message:Parse() error: %v, member: %s req: %s", err,
             memberMsg.member.Info(), string(memberMsg.reqBody))
         return err
     }
-    err := s.fnMap[parsedMsg.EventName](s, memberMsg.member, parsedMsg.Data)
+    err := s.event_handlers[parsedMsg.EventName](s, memberMsg.member, parsedMsg.Data)
     if err != nil {
         logger.Error("parsedMsg.EventName handle error: %s, member: %s req: %s",
             err, memberMsg.member.Info(), memberMsg.reqBody)
@@ -111,20 +104,20 @@ func (s *Server) onMemberErrorMsg(memberErrorMsg MemberErrorMsg) error {
     return nil
 }
 
-func (s *Server) GetOrCreateRoomByRoomId(roomId string, create bool) *Room {
+func (s *Server) getOrCreateRoomByRoomId(roomId string, create bool) *Room {
     room, ok := s.rooms[roomId]
     if ok {
         return room
     } else if create {
-        room = &Room { roomId: roomId }
+        room = NewRoom(roomId)
         s.rooms[roomId] = room
         return room
     }
     return nil
 }
 
-func (s *Server) findRoomByMember(m *Member) *Room {
-    if room, ok := s.rooms[m.roomId]; ok {
+func (s *Server) findRoomByMember(m IMember) *Room {
+    if room, ok := s.rooms[m.GetRoomId()]; ok {
         return room
     }
     return nil
@@ -137,8 +130,8 @@ func (s *Server) checkRemoveRoom(room *Room) {
     }
 }
 
-func (s *Server) memberQuitRoom(m *Member) {
-    if m.roomId == "" {
+func (s *Server) memberQuitRoom(m IMember) {
+    if m.GetRoomId() == "" {
         return
     }
     room := s.findRoomByMember(m)
@@ -150,17 +143,21 @@ func (s *Server) memberQuitRoom(m *Member) {
     s.checkRemoveRoom(room)
 }
 
-func (s *Server) GetMemberByUuid(uuid uuid.UUID) *Member {
-    if member, ok := s.members[uuid.String()]; ok {
+func (s *Server) getMemberByUuid(uuid string) IMember {
+    if member, ok := s.members[uuid]; ok {
         return member
     }
     return nil
 }
 
-func (s *Server) removeMember(m *Member) {
+func (s *Server) addMember(m IMember) {
+    s.members[m.GetUuid().String()] = m
+}
+
+func (s *Server) removeMember(m IMember) {
     logger.Info("member: %s", m.Info())
     s.memberQuitRoom(m)
-    delete(s.members, m.uuid.String())
+    delete(s.members, m.GetUuid().String())
     m.Dispose()
 }
 
@@ -182,12 +179,12 @@ new server
 
 func NewServer() *Server {
     s := Server{
-        members: make(map[string]*Member),
-        rooms:   make(map[string]*Room),
+        members:      make(map[string]IMember),
+        rooms:        make(map[string]*Room),
         connectionCh: make(chan *websocket.Conn, 128),
-        recvCh:  make(chan MemberMsg, 16),
-        errCh:   make(chan MemberErrorMsg, 16),
-        fnMap: map[string]func(*Server, *Member, []byte) error{
+        recvCh:       make(chan MemberMsg, 16),
+        errCh:        make(chan MemberErrorMsg, 16),
+        event_handlers: map[string]func(*Server, IMember, []byte) error{
             "__join":          onJoin,
             "__ice_candidate": onIceCandidate,
             "__offer":         onOffer,

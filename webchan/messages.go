@@ -2,6 +2,7 @@ package webchan
 
 import (
 	"encoding/json"
+	"webrtc-signaling/pkg/logger"
 
 	uuid "github.com/satori/go.uuid"
 )
@@ -17,20 +18,18 @@ func (t *Message) Parse(data []byte) error {
     return json.Unmarshal(data, t)
 }
 
-type MsgJoin struct {
-    RoomId string `json:"room"`
-}
+func GenJsonNewPeer(selfUuid uuid.UUID) ([]byte, error) {
+    msgDataNewPeers := &MessageDataNewPeer{
+        SocketId: selfUuid.String(),
+    }
+    data, err := json.Marshal(msgDataNewPeers)
+    if err != nil {
+        return nil, err
+    }
 
-func (m *MsgJoin) Parse(data []byte) error {
-    return json.Unmarshal(data, m)
-}
-
-func GenJsonRspNewPeer(selfUuid uuid.UUID) ([]byte, error) {
-    msg := map[string]interface{}{
-        "eventName": "_new_peer",
-        "data": map[string]string{
-            "socketId": selfUuid.String(),
-        },
+    msg := &Message{
+        EventName: "_new_peer",
+        Data:      data,
     }
     return json.Marshal(msg)
 }
@@ -44,78 +43,76 @@ func GenJsonRspPeers(membersUuids []uuid.UUID, selfUuid uuid.UUID) ([]byte, erro
         }
     }
 
-    msg := map[string]interface{}{
-        "eventName": "_peers",
-        "data": map[string]interface{}{
-            "connections": connections,
-            "you":         selfUuid.String(),
-        },
+    msgDataRspPeers := &MessageDataPeers{
+        Connections: connections,
+        You:         selfUuid.String(),
+    }
+    data, err := json.Marshal(msgDataRspPeers)
+    if err != nil {
+        return nil, err
+    }
+
+    msg := &Message{
+        EventName: "_peers",
+        Data:      data,
     }
     return json.Marshal(msg)
 }
 
-type MsgICECandidate struct {
-    Candidate json.RawMessage `json:"candidate"`
-    Id        json.RawMessage `json:"id"`
-    Label     json.RawMessage `json:"label"`
-    SocketId  json.RawMessage `json:"socketId"`
-}
-
-func (m *MsgICECandidate) Parse(data []byte) error {
-    return json.Unmarshal(data, m)
-}
-
-func GenJsonRspAgainstICECandidate(msgIceCandidate *MsgICECandidate,
+func GenJsonICECandidateRsp(msgIceCandidate *MessageDataICECandidate,
     selfUuid uuid.UUID) ([]byte, error) {
-    msg := map[string]interface{}{
-        "eventName": "_ice_candidate",
-        "data": map[string]interface{}{
-            "candidate":     msgIceCandidate.Candidate,
-            "id":            msgIceCandidate.Id,
-            "label":         msgIceCandidate.Label,
-            "sdpMLineIndex": msgIceCandidate.Label,
-            "socketId":      selfUuid.String(),
-        },
+
+    msgIceCandidateRsp := &MessageDataICECandidateRsp{
+        Candidate:     msgIceCandidate.Candidate,
+        Id:            msgIceCandidate.Id,
+        Label:         msgIceCandidate.Label,
+        SdpMLineIndex: msgIceCandidate.Label,
+        SocketId:      selfUuid.String(),
+    }
+    data, err := json.Marshal(msgIceCandidateRsp)
+    if err != nil {
+        return nil, err
+    }
+
+    msg := &Message{
+        EventName: "_ice_candidate",
+        Data:      data,
     }
     return json.Marshal(msg)
 }
 
-type MsgOffer struct {
-    Sdp      json.RawMessage `json:"sdp"`
-    SocketId json.RawMessage `json:"socketId"`
-}
+func GenJsonOfferRsp(msgOffer *MessageDataOffer, selfUuid uuid.UUID) ([]byte, error) {
+    msgOfferRsp := &MessageDataOfferRsp{
+        Sdp:      msgOffer.Sdp,
+        SocketId: selfUuid.String(),
+    }
+    data, err := json.Marshal(msgOfferRsp)
+    if err != nil {
+        return nil, err
+    }
 
-func (m *MsgOffer) Parse(data []byte) error {
-    return json.Unmarshal(data, m)
-}
+    logger.Info("")
 
-func GenJsonRspAgainstOffer(msgOffer *MsgOffer, selfUuid uuid.UUID) ([]byte, error) {
-    msg := map[string]interface{}{
-        "eventName": "_offer",
-        "data": map[string]interface{}{
-            "sdp":      msgOffer.Sdp,
-            "socketId": selfUuid.String(),
-        },
+    msg := &Message{
+        EventName: "_offer",
+        Data:      data,
     }
     return json.Marshal(msg)
 }
 
-type MsgAnswer struct {
-    Sdp      json.RawMessage `json:"sdp"`
-    SocketId json.RawMessage `json:"socketId"`
-}
+func GenJsonAnswerRsp(msgAnswer *MessageDataAnswer, selfUuid uuid.UUID) ([]byte, error) {
+    msgOfferAns := &MessageDataAnswer{
+        Sdp:      msgAnswer.Sdp,
+        SocketId: selfUuid.String(),
+    }
+    data, err := json.Marshal(msgOfferAns)
+    if err != nil {
+        return nil, err
+    }
 
-func (m *MsgAnswer) Parse(data []byte) error {
-    return json.Unmarshal(data, m)
-}
-
-func GenJsonRspAgainstAnswer(msgAnswer *MsgAnswer, selfUuid uuid.UUID) ([]byte, error) {
-    msg := map[string]interface{}{
-        "eventName": "_answer",
-        "data": map[string]interface{}{
-            "sdp":      msgAnswer.Sdp,
-            "socketId": selfUuid.String(),
-        },
+    msg := &Message{
+        EventName: "_answer",
+        Data:      data,
     }
     return json.Marshal(msg)
 }

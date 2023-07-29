@@ -8,22 +8,27 @@ import (
 )
 
 type Room struct {
-    roomId string
-    members map[string]*Member
+    roomId  string
+    members map[string]IMember
 }
 
-func (t *Room) AddMember(m *Member) {
-    if t.members == nil {
-        t.members = make(map[string]*Member)
+func NewRoom(roomId string) *Room {
+    return &Room{
+        roomId:  roomId,
+        members: make(map[string]IMember),
     }
-    m.roomId = t.roomId
-    t.members[m.uuid.String()] = m
+}
+
+func (t *Room) AddMember(m IMember) {
+    m.SetRoomId(t.roomId)
+    t.members[m.GetUuid().String()] = m
     logger.Info("room: %s, member: %s", t.Info(), m.Info())
 }
 
-func (t *Room) RemoveMember(m *Member) {
-    delete(t.members, m.uuid.String())
-    m.roomId = ""
+func (t *Room) RemoveMember(m IMember) {
+    delete(t.members, m.GetUuid().String())
+    logger.Info("room: %s, member: %s", t.Info(), m.Info())
+    m.SetRoomId("")
 }
 
 func (t *Room) CountMembers() int {
@@ -39,7 +44,7 @@ func (t *Room) GetMemberUuids() []uuid.UUID {
     }
     uuids := make([]uuid.UUID, 0, len(t.members))
     for _, m := range t.members {
-        uuids = append(uuids, m.uuid)
+        uuids = append(uuids, m.GetUuid())
     }
     return uuids
 }

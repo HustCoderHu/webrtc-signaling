@@ -13,4 +13,3 @@ type Handlers struct {
 	OnDisconnection func(c *Member, message string)
 	OnMessage       func(c *Member, message []byte)
 }
-

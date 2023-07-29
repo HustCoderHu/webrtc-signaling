@@ -1,36 +1,38 @@
 package webchan
 
 import (
+	"encoding/json"
 	"webrtc-signaling/pkg/logger"
 
 	uuid "github.com/satori/go.uuid"
 )
 
-func onJoin(s *Server, m *Member, msgData []byte) error {
+func onJoin(s *Server, m IMember, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
 
-    joinMsg := MsgJoin{}
-    if err := joinMsg.Parse(msgData); err != nil {
+    joinMsg := &MessageDataJoin{}
+    if err := json.Unmarshal(msgData, joinMsg); err != nil {
         logger.Error("joinMsg.Parse error: %s, data: %s, member: %s",
             err, msgData, m.Info())
     }
 
-    room := s.GetOrCreateRoomByRoomId(joinMsg.RoomId, true)
-    room.AddMember(m)
-
+    room := s.getOrCreateRoomByRoomId(joinMsg.RoomId, true)
     uuids := room.GetMemberUuids()
-    rspJson, err := GenJsonRspPeers(uuids, m.uuid)
+    rspJson, err := GenJsonRspPeers(uuids, m.GetUuid())
     if err != nil {
         logger.Error("GenJsonRspPeers error: %s, data: %s, member: %s",
             err, msgData, m.Info())
         return nil
     }
+    room.AddMember(m)
     m.OnMsg(rspJson)
+
+    notifyRoomMembers(room, m.GetUuid())
     return nil
 }
 
 func notifyRoomMembers(room *Room, selfUuid uuid.UUID) {
-    msg, err := GenJsonRspNewPeer(selfUuid)
+    msg, err := GenJsonNewPeer(selfUuid)
     if err != nil {
         logger.Error("GenJsonRspNewPeer error: %s, data: %s, member: %s",
             err, msg, selfUuid)
@@ -39,15 +41,15 @@ func notifyRoomMembers(room *Room, selfUuid uuid.UUID) {
     room.BroadCastMsgExceptMember(msg, selfUuid)
 }
 
-func onIceCandidate(s *Server, m *Member, msgData []byte) error {
+func onIceCandidate(s *Server, m IMember, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
-    iceMsg := &MsgICECandidate{}
-    if err := iceMsg.Parse(msgData); err != nil {
+    iceMsg := &MessageDataICECandidate{}
+    if err := json.Unmarshal(msgData, iceMsg); err != nil {
         logger.Error("iceMsg.Parse error: %s, data: %s, member: %s",
             err, msgData, m.Info())
         return err
     }
-    msg, err := GenJsonRspAgainstICECandidate(iceMsg, m.uuid)
+    msg, err := GenJsonICECandidateRsp(iceMsg, m.GetUuid())
     if err != nil {
         logger.Error(
             "GetJsonRspAgainstICECandidate error: %s, data: %s, member: %s",
@@ -55,7 +57,7 @@ func onIceCandidate(s *Server, m *Member, msgData []byte) error {
         return err
     }
 
-    targetMember := s.GetMemberByUuid(uuid.UUID(iceMsg.SocketId))
+    targetMember := s.getMemberByUuid(iceMsg.SocketId)
     if targetMember == nil {
         logger.Error("target member not found: %s", iceMsg.SocketId)
         return nil
@@ -64,51 +66,51 @@ func onIceCandidate(s *Server, m *Member, msgData []byte) error {
     return nil
 }
 
-func onOffer(s *Server, m *Member, msgData []byte) error {
-    logger.Info("data: %s from: %s", msgData, m.Info())
+func onOffer(s *Server, m IMember, msgData []byte) error {
+    // logger.Info("data: %s from: %s", msgData, m.Info())
 
-    offerMsg := &MsgOffer{}
-    if err := offerMsg.Parse(msgData); err != nil {
+    offerMsg := &MessageDataOffer{}
+    if err := json.Unmarshal(msgData, offerMsg); err != nil {
         logger.Error("offerMsg.Parse error: %s, data: %s, member: %s",
             err, msgData, m.Info())
         return err
     }
 
-    msg, err := GenJsonRspAgainstOffer(offerMsg, m.uuid)
+    msg, err := GenJsonOfferRsp(offerMsg, m.GetUuid())
     if err != nil {
         logger.Error(
             "GetJsonRspAgainstOffer error: %s, data: %s, member: %s",
             err, msgData, m.Info())
         return err
     }
-    targetMember := s.GetMemberByUuid(uuid.UUID(offerMsg.SocketId))
+    targetMember := s.getMemberByUuid(offerMsg.SocketId)
     if targetMember == nil {
-        logger.Error("target member not found: %s", offerMsg.SocketId)
+        logger.Warning("target member not found: %s", offerMsg.SocketId)
         return nil
     }
     targetMember.OnMsg(msg)
     return nil
 }
 
-func onAnswer(s *Server, m *Member, msgData []byte) error {
+func onAnswer(s *Server, m IMember, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
 
-    answerMsg := &MsgAnswer{}
-    if err := answerMsg.Parse(msgData); err != nil {
+    answerMsg := &MessageDataAnswer{}
+    if err := json.Unmarshal(msgData, answerMsg); err != nil {
         logger.Error("answerMsg.Parse error: %s, data: %s, member: %s",
             err, msgData, m.Info())
         return err
     }
 
-    msg, err := GenJsonRspAgainstAnswer(answerMsg, m.uuid)
+    msg, err := GenJsonAnswerRsp(answerMsg, m.GetUuid())
     if err != nil {
         logger.Error(
             "GetJsonRspAgainstAnswer error: %s, data: %s, member: %s",
             err, msgData, m.Info())
         return err
     }
-    
-    targetMember := s.GetMemberByUuid(uuid.UUID(answerMsg.SocketId))
+
+    targetMember := s.getMemberByUuid(answerMsg.SocketId)
     if targetMember == nil {
         logger.Error("target member not found: %s", answerMsg.SocketId)
         return nil
@@ -117,12 +119,12 @@ func onAnswer(s *Server, m *Member, msgData []byte) error {
     return nil
 }
 
-func onInvite(s *Server, m *Member, msgData []byte) error {
+func onInvite(s *Server, m IMember, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
     return nil
 }
 
-func onAck(s *Server, m *Member, msgData []byte) error {
+func onAck(s *Server, m IMember, msgData []byte) error {
     logger.Info("data: %s from: %s", msgData, m.Info())
     return nil
 }

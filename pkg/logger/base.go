@@ -44,7 +44,8 @@ type defaultLogger struct{}
 
 func (l defaultLogger) Log(level string, str string) error {
 	tm := time.Now()
-	fmt.Println(tm.Format("2006-01-02 15:04:05"), level, syslogName+":", str)
+	fmt.Println(tm.Format("2006-01-02 15:04:05.000"), level, str)
+	// fmt.Println(tm.Format("2006-01-02 15:04:05"), level, syslogName+":", str)
 	return nil
 }
 
