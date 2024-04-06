@@ -131,11 +131,13 @@ func (s *Server) checkRemoveRoom(room *Room) {
 }
 
 func (s *Server) memberQuitRoom(m IMember) {
+    logger.Info("member: %s", m.Info())
     if m.GetRoomId() == "" {
         return
     }
     room := s.findRoomByMember(m)
     if room == nil {
+        logger.Info("room not found, roomId: %s, member: %s", m.GetRoomId(), m.Info())
         return
     }
     room.RemoveMember(m)

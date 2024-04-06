@@ -3,7 +3,7 @@ package webchan
 import "encoding/json"
 
 type MessageDataJoin struct {
-    RoomId string `json:"roomId"`
+    RoomId string `json:"room"`; // `json:"roomId"`
 }
 
 // func (m *MessageDataJoin) MarshalJSON() ([]byte, error) {

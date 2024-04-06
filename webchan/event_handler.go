@@ -15,6 +15,7 @@ func onJoin(s *Server, m IMember, msgData []byte) error {
         logger.Error("joinMsg.Parse error: %s, data: %s, member: %s",
             err, msgData, m.Info())
     }
+    m.SetRoomId(joinMsg.RoomId)
 
     room := s.getOrCreateRoomByRoomId(joinMsg.RoomId, true)
     uuids := room.GetMemberUuids()

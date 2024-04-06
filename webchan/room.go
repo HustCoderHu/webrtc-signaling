@@ -28,7 +28,7 @@ func (t *Room) AddMember(m IMember) {
 func (t *Room) RemoveMember(m IMember) {
     delete(t.members, m.GetUuid().String())
     logger.Info("room: %s, member: %s", t.Info(), m.Info())
-    m.SetRoomId("")
+    // m.SetRoomId("")
 }
 
 func (t *Room) CountMembers() int {

@@ -71,8 +71,12 @@ func (t *Member) Dispose() error {
 
 func (t *Member) Info() string {
     addr := t.wsConn.RemoteAddr().String()
-    return "[name: " + t.GetUserName() + " addr: " +
-        addr + " id: " + t.GetUuid().String() + " ]"
+    return "[name: " + t.GetUserName() +
+      " roomId: " + t.GetRoomId() +
+      " addr: " + addr +
+      " id: " + t.GetUuid().String() +
+      " iceCandidate: " + t.iceCandidate +
+      " ]"
 }
 
 func (t *Member) OnMsg(msg []byte) string {
