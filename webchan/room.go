@@ -22,12 +22,12 @@ func NewRoom(roomId string) *Room {
 func (t *Room) AddMember(m IMember) {
     m.SetRoomId(t.roomId)
     t.members[m.GetUuid().String()] = m
-    logger.Info("room: %s, member: %s", t.Info(), m.Info())
+    logger.Info("after add, room: %s, member: %s", t.Info(), m.Info())
 }
 
 func (t *Room) RemoveMember(m IMember) {
     delete(t.members, m.GetUuid().String())
-    logger.Info("room: %s, member: %s", t.Info(), m.Info())
+    logger.Info("add remove, room: %s, member: %s", t.Info(), m.Info())
     // m.SetRoomId("")
 }
 
